@@ -1,237 +1,217 @@
-# 社交媒体分析平台 📊
+# Social-Media-Analytics
 
-一个功能强大的社交媒体数据分析和内容优化平台，支持多平台数据整合、智能分析和运营优化建议。
+社交媒体数据分析：Streamlit 仪表板（v1）+ headless CLI + LLM 运营洞察（v2）。
 
-## ✨ 核心功能
+v1 提供 Streamlit 仪表板（图表 / 筛选 / 报告）+ 内容 / 粉丝 / 评论情感分析 + 32 个
+测试。v2 在不动 v1 代码的前提下补：
 
-### 1. 多平台整合
-- 📱 支持微信、微博、抖音、小红书四大平台
-- 🔄 统一数据格式，一站式管理
-- 📊 跨平台数据对比分析
+1. **Headless 分析模块** — v1 的 analyzer 都强依赖 Streamlit + plotly。v2 加
+   `headless_analytics.py` 纯 pandas 实现同样指标，让脚本 / CI / 报表 cron 能跑。
+2. **CLI 入口** — `__main__.py` 5 个子命令脚本化生成日报。
+3. **LLM 运营洞察** — 喂入指标 → LLM 生成 overview / 内容建议 / 平台建议 /
+   风险四段报告。缺 API key 时退化为规则启发式（基于流失率 / 互动率 / 情感分布
+   的分支逻辑）。
 
-### 2. 内容分析
-- 🔥 爆款内容特征识别
-- 📈 阅读量、点赞、转发深度分析
-- ⏰ 最佳发布时间建议
-- 📝 内容类型表现对比
+## v2 新增
 
-### 3. 粉丝分析
-- 📊 粉丝增长趋势追踪
-- ⏰ 粉丝活跃时段分析
-- 👤 粉丝画像（年龄、性别、地域）
-- 📈 留存率分析
+| 文件 | 干什么 |
+|---|---|
+| `headless_analytics.py` | `compute_content_metrics` + `compute_fan_growth` + `summarize_sentiment` + `platform_breakdown` + `content_type_breakdown` + `demographic_breakdown` |
+| `llm_insights.py` | `generate_insights(content, fan, sentiment, ...)` → `InsightReport`（overview / 内容建议 / 平台建议 / 风险）+ markdown 渲染 |
+| `__main__.py` | CLI 5 子命令 content / fan / sentiment / insights / list-models |
+| `tests/test_headless_analytics.py` | 27 测试 |
+| `tests/test_llm_insights.py` | 20 测试：规则覆盖各种场景 + LLM mock |
 
-### 4. 情感分析
-- 💬 评论情感倾向分析
-- 📊 情感分布可视化
-- 📈 情感趋势追踪
-- ⚠️ 负面反馈预警
+总 79 个测试通过（32 v1 + 47 v2），2 秒跑完。
 
-### 5. 竞品对比
-- 📊 多维度账号对比
-- 📱 平台间表现对比
-- 📝 内容策略对比
+## v1 仍保留
 
-### 6. 报告导出
-- 📋 自动化运营报告生成
-- 📥 支持 Markdown 格式导出
-- 🎯 定制化报告章节
+| 模块 | 干什么 |
+|---|---|
+| `dashboard.py` | Streamlit 交互式主界面 |
+| `content_analyzer.py` | 内容表现 + plotly 图表 |
+| `fan_analyzer.py` | 粉丝增长 + plotly 可视化 |
+| `sentiment_analyzer.py` | SnowNLP 评论情感 + 词云 |
+| `generate_sample_data.py` | 合成示例数据 |
+| `sample_data/{content,comment,fan}_sample.csv` | 示例数据集 |
 
-## 🚀 快速开始
+## 安装
 
-### 环境要求
-
-- Python 3.8+
-- Windows / macOS / Linux
-
-### 安装步骤
-
-1. **克隆项目**
-```bash
-cd social-media-analytics
-```
-
-2. **安装依赖**
 ```bash
 pip install -r requirements.txt
+# 可选：v2 LLM 洞察
+pip install openai      # openai / deepseek
+pip install anthropic
 ```
 
-3. **运行应用**
+## 快速开始
+
+### v2 headless CLI
+
+```bash
+# 内容表现统计 + 平台 / 内容类型分解
+python __main__.py content sample_data/content_sample.csv
+
+# 粉丝增长 + 人口学分布
+python __main__.py fan sample_data/fan_sample.csv
+
+# 评论情感汇总（自动调 v1 SnowNLP 算 score，如果 CSV 没有 sentiment_score 列）
+python __main__.py sentiment sample_data/comment_sample.csv
+
+# 综合 LLM 洞察报告
+python __main__.py insights sample_data/content_sample.csv \
+    --fan-csv sample_data/fan_sample.csv \
+    --comment-csv sample_data/comment_sample.csv \
+    --use-llm --backend deepseek -o report.md
+
+# LLM backend 配置
+python __main__.py list-models
+```
+
+### v1 Streamlit 仪表板
+
 ```bash
 streamlit run dashboard.py
 ```
 
-4. **访问应用**
-打开浏览器访问：http://localhost:8501
+### 库调用
 
-## 📁 项目结构
+```python
+import pandas as pd
+from headless_analytics import (
+    compute_content_metrics, compute_fan_growth,
+    platform_breakdown, content_type_breakdown,
+)
+from llm_insights import generate_insights, LLMClient
+
+content_df = pd.read_csv("content.csv", encoding="utf-8-sig")
+fan_df = pd.read_csv("fans.csv", encoding="utf-8-sig")
+
+content_m = compute_content_metrics(content_df)
+fan_m = compute_fan_growth(fan_df)
+platforms = platform_breakdown(content_df)
+types = content_type_breakdown(content_df)
+
+report = generate_insights(
+    content_metrics=content_m.to_dict(),
+    fan_metrics=fan_m.to_dict(),
+    platforms=platforms,
+    content_types=types,
+    llm_client=LLMClient(backend="deepseek"),
+)
+print(report.to_markdown())
+```
+
+## 一个真实输出（heuristic 路径）
 
 ```
-social-media-analytics/
-├── dashboard.py              # 主界面
-├── content_analyzer.py       # 内容分析模块
-├── fan_analyzer.py          # 粉丝分析模块
-├── sentiment_analyzer.py    # 情感分析模块
-├── requirements.txt         # 依赖列表
-├── README.md               # 项目说明
-├── tests/                  # 单元测试
+$ python __main__.py insights sample_data/content_sample.csv \
+    --fan-csv sample_data/fan_sample.csv
+
+## 整体概览
+
+发布 100 篇内容，总阅读 5,251,886，平均互动率 27.60%，粉丝净增 +6523（+80.3%）。
+
+## 内容运营建议
+
+- 复盘爆款 "精彩 48 分享"（抖音） 找通用规律
+- 高互动内容类型：视频 （203,864 互动），可增加产量
+
+## 平台运营建议
+
+- 主投放平台：小红书（1,825,015 阅读）
+- 互动率最高：抖音（54.52%）
+
+## 风险关注
+
+- 流失率 18.0%，需排查内容方向 / 互动质量
+```
+
+## 数据 schema
+
+### 内容表现 CSV
+| 列 | 类型 | 必需 |
+|---|---|---|
+| content_id | int | 否 |
+| title | str | 否 |
+| platform | str | 否（影响 platform_breakdown）|
+| reads | int | **是** |
+| likes | int | **是** |
+| comments | int | 否 |
+| shares | int | 否 |
+| content_type | str | 否 |
+| publish_time | datetime | 否 |
+| keywords | str | 否 |
+
+### 粉丝增长 CSV
+| 列 | 类型 | 必需 |
+|---|---|---|
+| date | datetime-parseable | **是** |
+| new_fans | int | **是** |
+| unfollows | int | **是** |
+| total_fans | int | 否 |
+| interactions | int | 否 |
+| gender | str | 否 |
+| age | int | 否 |
+| city | str | 否 |
+
+### 评论情感 CSV
+| 列 | 类型 | 必需 |
+|---|---|---|
+| comment | str | **是**（用于 SnowNLP 现场算）|
+| date | datetime | 否 |
+| sentiment_score | float | 否（CSV 没有时 CLI 自动调 SnowNLP）|
+
+## 设计取舍
+
+- **headless_analytics 与 v1 analyzer 共存**：v1 的 plotly 图表 + Streamlit
+  UI 没动；v2 另起一个纯 pandas 模块算指标。要 UI 用 v1，要脚本化 / CI 用 v2。
+- **LLM insights 缺 key 退规则不抛错**：规则启发式覆盖 5 种关键风险信号（高流失、
+  负增长、负面情感、低互动、爆款复盘），用户没 LLM 也能拿到基线建议。
+- **encoding="utf-8-sig"**：v1 sample_data CSV 以 BOM 开头，CLI 默认尝试
+  `utf-8-sig`，失败再退到 `utf-8`，兼容两种写法。
+- **CLI sentiment 命令现场调 SnowNLP**：如果传入 CSV 还没有 `sentiment_score`
+  列，自动用 v1 `SentimentAnalyzer.analyze_sentiment` 现算。
+
+## 项目结构
+
+```
+Social-Media-Analytics/
+├── __main__.py                  # v2 CLI
+├── headless_analytics.py        # v2 纯 pandas 分析
+├── llm_insights.py              # v2 LLM 洞察
+├── dashboard.py                 # v1 Streamlit
+├── content_analyzer.py          # v1 内容分析（带 plotly）
+├── fan_analyzer.py              # v1 粉丝分析
+├── sentiment_analyzer.py        # v1 SnowNLP 评论情感
+├── generate_sample_data.py
+├── verify.py
+├── tests/                       # 79 测试
 │   ├── test_content.py
 │   ├── test_fan.py
-│   └── test_sentiment.py
-└── sample_data/            # 示例数据
-    ├── content_sample.csv
-    ├── fan_sample.csv
-    └── comment_sample.csv
+│   ├── test_sentiment.py
+│   ├── test_headless_analytics.py   # v2 新增
+│   └── test_llm_insights.py         # v2 新增
+├── sample_data/{content,comment,fan}_sample.csv
+└── requirements.txt
 ```
 
-## 📊 数据格式
+## 测试
 
-### 内容数据 (content_data.csv)
-```csv
-content_id,title,platform,reads,likes,comments,shares,publish_time,content_type,keywords
-1,精彩分享，微信，50000,3000,200,150,2024-01-01 10:00:00，图文，科技,AI
-2,视频展示，抖音，100000,8000,500,400,2024-01-01 14:00:00，视频，生活，日常
-```
-
-### 粉丝数据 (fan_data.csv)
-```csv
-date,new_fans,unfollows,total_fans,interactions,gender,age,city
-2024-01-01,200,50,10000,1500，男，25，北京
-2024-01-02,250,40,10200,1600，女，30，上海
-```
-
-### 评论数据 (comment_data.csv)
-```csv
-comment,date,content_id,platform
-太棒了，非常喜欢！,2024-01-01,1，微信
-一般般吧，2024-01-01,2，抖音
-```
-
-## 🎯 使用指南
-
-### 1. 数据导入
-- 使用示例数据快速体验
-- 上传 CSV 文件导入自有数据
-- 支持多平台数据混合分析
-
-### 2. 内容分析
-- 查看内容表现 TOP20
-- 分析爆款内容特征
-- 获取最佳发布时间建议
-
-### 3. 粉丝分析
-- 追踪粉丝增长趋势
-- 分析粉丝活跃时段
-- 了解粉丝画像特征
-
-### 4. 情感分析
-- 自动分析评论情感
-- 查看情感分布和趋势
-- 识别负面反馈
-
-### 5. 生成报告
-- 选择报告章节
-- 一键生成运营报告
-- 下载 Markdown 格式
-
-## 🧪 测试
-
-### 运行单元测试
 ```bash
-# 安装测试依赖
-pip install pytest pytest-cov
-
-# 运行所有测试
-pytest tests/ -v
-
-# 查看测试覆盖率
-pytest tests/ --cov=. --cov-report=html
+pytest tests/ --no-cov
 ```
 
-### 测试要求
-- ✅ 测试覆盖率 > 70%
-- ✅ 所有核心功能测试通过
-- ✅ UI 交互验证通过
+79 个测试，2 秒跑完。LLM mock，无网络 / 无 API key 依赖。SnowNLP 需要安装：
+`pip install snownlp`。
 
-## 🔧 技术栈
+## 已知限制
 
-- **前端界面**: Streamlit
-- **数据处理**: Pandas, NumPy
-- **数据可视化**: Plotly
-- **情感分析**: SnowNLP
-- **测试框架**: Pytest
+- 情感分析依赖 v1 的 SnowNLP，只支持中文；多语种需自己换 backend。
+- `compute_fan_growth` 的 churn_rate 用整段累计流失 / 起始粉丝数算，不是日 churn；
+  日粒度需要外部循环。
+- LLM `insights` 输出最多 5 条建议 + 3 条平台建议 + 5 条风险，超出自动裁。
 
-## 📝 API 集成（扩展功能）
+## 许可
 
-### 微信公号 API
-```python
-# 示例：从微信公号导入数据
-def import_wechat_data(appid, secret):
-    # 获取 accessToken
-    # 调用公众号 API
-    # 返回 DataFrame
-    pass
-```
-
-### 微博 API
-```python
-# 示例：从微博导入数据
-def import_weibo_data(access_token):
-    # 调用微博 API
-    # 解析响应
-    # 返回 DataFrame
-    pass
-```
-
-### 抖音 API
-```python
-# 示例：从抖音导入数据
-def import_douyin_data(access_token):
-    # 调用抖音开放平台 API
-    # 获取视频数据
-    # 返回 DataFrame
-    pass
-```
-
-### 小红书 API
-```python
-# 示例：从小红书导入数据
-def import_xiaohongshu_data(api_key):
-    # 调用小红书 API
-    # 获取笔记数据
-    # 返回 DataFrame
-    pass
-```
-
-## 💡 最佳实践
-
-### 1. 数据质量
-- 确保数据格式正确
-- 定期检查数据完整性
-- 清理异常值和重复数据
-
-### 2. 分析频率
-- 每日：查看基础指标
-- 每周：深度内容分析
-- 每月：生成完整报告
-
-### 3. 优化建议
-- 根据爆款特征调整内容策略
-- 在最佳发布时间发布
-- 及时回应负面评论
-
-## 🤝 贡献指南
-
-欢迎提交 Issue 和 Pull Request！
-
-## 📄 许可证
-
-MIT License
-
-## 📞 联系方式
-
-如有问题或建议，请提交 Issue。
-
----
-
-**Made with ❤️ for Social Media Operators**
+MIT
