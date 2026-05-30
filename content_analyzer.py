@@ -93,16 +93,16 @@ class ContentAnalyzer:
         Returns:
             包含特征分析的字典
         """
-        viral_content = self.identify_viral_content()
-        normal_content = self.data[~self.data.index.isin(viral_content.index)]
-        
+        viral_content = self.identify_viral_content().copy()
+        normal_content = self.data[~self.data.index.isin(viral_content.index)].copy()
+
         features = {}
-        
+
         # 分析标题长度
         if 'title' in viral_content.columns:
             features['viral_title_avg_length'] = viral_content['title'].str.len().mean()
             features['normal_title_avg_length'] = normal_content['title'].str.len().mean()
-        
+
         # 分析发布时间
         if 'publish_time' in viral_content.columns:
             viral_content['hour'] = pd.to_datetime(viral_content['publish_time']).dt.hour
@@ -273,7 +273,7 @@ def test_content_analyzer():
     features = analyzer.analyze_content_features()
     assert 'viral_title_avg_length' in features, "特征分析失败"
     
-    print("✓ 内容分析器测试通过")
+    print("[OK] 内容分析器测试通过")
     return True
 
 

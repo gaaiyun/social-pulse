@@ -1,8 +1,15 @@
-streamlit==1.32.0
-pandas==2.1.4
-numpy==1.26.3
-plotly==5.19.0
-snownlp==0.12.3
-pytest==8.0.0
-pytest-cov==4.1.0
-python-dateutil==2.8.2
+# 核心：命令行 + 仪表板共用
+pandas>=2.1
+numpy>=1.26
+python-dateutil>=2.8
+
+# 中文情感
+snownlp>=0.12.3
+
+# 仪表板（命令行不需要）
+streamlit>=1.32
+plotly>=5.19
+
+# 测试
+pytest>=8.0
+pytest-cov>=4.1

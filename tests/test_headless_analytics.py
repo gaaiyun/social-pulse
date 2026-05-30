@@ -14,7 +14,9 @@ from headless_analytics import (
     ContentMetrics, FanGrowthMetrics, SentimentSummary,
     compute_content_metrics, compute_fan_growth,
     content_type_breakdown, demographic_breakdown,
-    platform_breakdown, summarize_sentiment,
+    keyword_sentiment, platform_breakdown, posting_time_analysis,
+    sentiment_trend, summarize_sentiment, top_negative_comments,
+    viral_features,
 )
 
 
@@ -227,3 +229,152 @@ def test_sentiment_summary_to_dict_serializable():
     df = pd.DataFrame({"sentiment_score": [0.5, 0.7]})
     s = summarize_sentiment(df)
     json.dumps(s.to_dict(), ensure_ascii=False)
+
+
+# --- 发布时段分析 -----------------------------------------------------------
+
+@pytest.fixture
+def timed_content_df() -> pd.DataFrame:
+    rng = np.random.RandomState(7)
+    n = 60
+    # 发布时间横跨多天多个小时
+    times = pd.date_range("2024-03-01 00:00", periods=n, freq="3h")
+    return pd.DataFrame({
+        "content_id": range(1, n + 1),
+        "title": [f"标题{i}" * (1 + i % 3) for i in range(n)],
+        "platform": rng.choice(["微博", "小红书"], n),
+        "content_type": rng.choice(["图文", "视频"], n),
+        "reads": rng.randint(1000, 50000, n),
+        "likes": rng.randint(50, 5000, n),
+        "comments": rng.randint(10, 500, n),
+        "shares": rng.randint(5, 200, n),
+        "publish_time": times,
+        "keywords": rng.choice(["科技,AI", "生活,日常", "旅行,风景"], n),
+    })
+
+
+def test_posting_time_returns_best_hour_and_dow(timed_content_df):
+    out = posting_time_analysis(timed_content_df)
+    assert 0 <= out["best_hour"] <= 23
+    assert 0 <= out["best_dayofweek"] <= 6
+    assert len(out["by_hour"]) > 0
+
+
+def test_posting_time_missing_column_returns_empty():
+    df = pd.DataFrame({"reads": [1, 2], "likes": [1, 2]})
+    assert posting_time_analysis(df) == {}
+
+
+def test_posting_time_serializable(timed_content_df):
+    import json
+    json.dumps(posting_time_analysis(timed_content_df), ensure_ascii=False)
+
+
+# --- 爆款特征 ---------------------------------------------------------------
+
+def test_viral_features_counts_split(timed_content_df):
+    out = viral_features(timed_content_df, top_percent=0.2)
+    assert out["n_viral"] >= 1
+    assert out["n_viral"] + out["n_normal"] == len(timed_content_df)
+
+
+def test_viral_features_has_title_length(timed_content_df):
+    out = viral_features(timed_content_df)
+    assert out["viral_title_avg_length"] is not None
+    assert out["viral_title_avg_length"] > 0
+
+
+def test_viral_features_keywords_are_list(timed_content_df):
+    out = viral_features(timed_content_df)
+    assert isinstance(out["viral_top_keywords"], list)
+
+
+def test_viral_features_too_few_rows_returns_empty():
+    df = pd.DataFrame({"reads": [100, 200], "likes": [1, 2]})
+    assert viral_features(df) == {}
+
+
+def test_viral_features_serializable(timed_content_df):
+    import json
+    json.dumps(viral_features(timed_content_df), ensure_ascii=False)
+
+
+# --- 情感日趋势 -------------------------------------------------------------
+
+@pytest.fixture
+def scored_comments_df() -> pd.DataFrame:
+    return pd.DataFrame({
+        "comment": ["很好", "一般", "太差了", "喜欢", "失望", "推荐"],
+        "date": ["2024-01-01", "2024-01-01", "2024-01-02",
+                 "2024-01-02", "2024-01-03", "2024-01-03"],
+        "sentiment_score": [0.9, 0.5, 0.1, 0.8, 0.2, 0.7],
+    })
+
+
+def test_sentiment_trend_groups_by_day(scored_comments_df):
+    out = sentiment_trend(scored_comments_df)
+    assert len(out) == 3            # 三天
+    assert out[0]["date"] == "2024-01-01"
+    assert out[0]["n_comments"] == 2
+
+
+def test_sentiment_trend_sorted_ascending(scored_comments_df):
+    out = sentiment_trend(scored_comments_df)
+    dates = [r["date"] for r in out]
+    assert dates == sorted(dates)
+
+
+def test_sentiment_trend_missing_col_raises():
+    df = pd.DataFrame({"sentiment_score": [0.5]})
+    with pytest.raises(ValueError, match="date"):
+        sentiment_trend(df)
+
+
+def test_sentiment_trend_empty_raises():
+    with pytest.raises(ValueError, match="为空"):
+        sentiment_trend(pd.DataFrame())
+
+
+# --- 关键词情感 -------------------------------------------------------------
+
+def test_keyword_sentiment_finds_hits(scored_comments_df):
+    out = keyword_sentiment(scored_comments_df, ["太差", "喜欢"])
+    assert "太差" in out
+    assert out["太差"]["n_comments"] == 1
+    assert out["太差"]["mean_score"] < 0.4
+
+
+def test_keyword_sentiment_skips_no_hits(scored_comments_df):
+    out = keyword_sentiment(scored_comments_df, ["不存在的词"])
+    assert out == {}
+
+
+def test_keyword_sentiment_missing_col_raises():
+    df = pd.DataFrame({"comment": ["x"]})
+    with pytest.raises(ValueError, match="sentiment_score"):
+        keyword_sentiment(df, ["x"])
+
+
+# --- 负面评论提取 -----------------------------------------------------------
+
+def test_top_negative_returns_worst_first(scored_comments_df):
+    out = top_negative_comments(scored_comments_df, neg_threshold=0.4)
+    assert len(out) == 2            # 0.1, 0.2
+    assert out[0]["score"] <= out[1]["score"]
+    assert out[0]["score"] == pytest.approx(0.1)
+
+
+def test_top_negative_respects_top_n(scored_comments_df):
+    out = top_negative_comments(scored_comments_df, neg_threshold=1.0, top_n=3)
+    assert len(out) == 3
+
+
+def test_top_negative_serializable(scored_comments_df):
+    import json
+    json.dumps(top_negative_comments(scored_comments_df), ensure_ascii=False)
+
+
+def test_top_negative_missing_col_raises():
+    df = pd.DataFrame({"comment": ["x"]})
+    with pytest.raises(ValueError, match="sentiment_score"):
+        top_negative_comments(df)

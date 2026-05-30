@@ -8,7 +8,7 @@ from fan_analyzer import FanAnalyzer
 from sentiment_analyzer import SentimentAnalyzer
 
 print("=" * 50)
-print("社交媒体分析平台 - 模块验证")
+print("social-pulse - 模块验证")
 print("=" * 50)
 print()
 
@@ -54,6 +54,5 @@ print("[SUCCESS] 所有模块验证成功！")
 print("=" * 50)
 print()
 print("下一步:")
-print("  1. 运行 start.bat 启动应用")
-print("  2. 或使用命令：streamlit run dashboard.py")
-print("  3. 浏览器访问：http://localhost:8501")
+print("  命令行：python __main__.py content sample_data/content_sample.csv")
+print("  仪表板：streamlit run dashboard.py（浏览器访问 http://localhost:8501）")
