@@ -1,13 +1,15 @@
 """无 Streamlit / plotly 依赖的社媒分析函数集合。
 
-v1 的 ContentAnalyzer / FanAnalyzer / SentimentAnalyzer 都耦合 plotly 图表
-渲染。v2 这一层只算指标、返回 dataclass / dict，让脚本和 cron 任务能用。
+仪表板里的 ContentAnalyzer / FanAnalyzer / SentimentAnalyzer 都耦合 plotly
+图表渲染，没法脚本化。这一层只算指标、返回 dataclass / dict，让命令行、
+定时任务和报表脚本能直接拿到结构化结果。
 
 覆盖范围：
-- 内容表现：互动率 / 阅读完成率代理 / 爆款识别
-- 粉丝增长：新增 / 流失 / 净增 / 留存代理
-- 情感统计：基于 v1 sentiment_analyzer 的 SnowNLP 结果汇总
-- 趋势检测：按平台 / 内容类型分组的环比变化
+- 内容表现：互动率 / 爆款识别 / 平台 & 内容类型分解
+- 发布时段：按小时 / 星期几的平均互动率，找最优发布窗口
+- 爆款拆解：高互动 vs 普通内容的标题长度 / 关键词 / 发布时段差异
+- 粉丝增长：新增 / 流失 / 净增 / 留存代理 + 人口学画像
+- 情感分析：基于 SnowNLP 打分的汇总 / 日趋势 / 关键词情感 / 负面反馈提取
 """
 from __future__ import annotations
 
@@ -166,6 +168,112 @@ def content_type_breakdown(df: pd.DataFrame,
     return out
 
 
+def posting_time_analysis(df: pd.DataFrame,
+                          column_map: Optional[Dict] = None) -> Dict:
+    """按发布小时 / 星期几统计平均互动率，定位最优发布窗口。
+
+    需要 publish_time 列（可被 pandas 解析）。星期几 0=周一、6=周日。
+    """
+    cols = dict(DEFAULT_CONTENT_COLS)
+    if column_map:
+        cols.update(column_map)
+    if cols["publish_time"] not in df.columns:
+        return {}
+
+    df = df.copy()
+    df["_dt"] = pd.to_datetime(df[cols["publish_time"]], errors="coerce")
+    df = df.dropna(subset=["_dt"])
+    if len(df) == 0:
+        return {}
+
+    df["_engagement"] = (df.get(cols["likes"], 0).fillna(0)
+                         + df.get(cols["comments"], 0).fillna(0)
+                         + df.get(cols["shares"], 0).fillna(0))
+    df["_engagement_rate"] = df["_engagement"] / df[cols["reads"]].replace(0, np.nan)
+
+    df["_hour"] = df["_dt"].dt.hour
+    df["_dow"] = df["_dt"].dt.dayofweek
+
+    by_hour = df.groupby("_hour")["_engagement_rate"].mean()
+    by_dow = df.groupby("_dow")["_engagement_rate"].mean()
+
+    return {
+        "best_hour": int(by_hour.idxmax()),
+        "best_dayofweek": int(by_dow.idxmax()),
+        "by_hour": {int(h): float(v) for h, v in by_hour.items()},
+        "by_dayofweek": {int(d): float(v) for d, v in by_dow.items()},
+    }
+
+
+def viral_features(df: pd.DataFrame,
+                   top_percent: float = 0.2,
+                   column_map: Optional[Dict] = None) -> Dict:
+    """对比爆款（互动率前 top_percent）与普通内容的特征差异。
+
+    输出标题平均长度、发布高峰时段、高频关键词、内容类型分布的对照，
+    用来回答「爆款长什么样」。数据不足 5 篇时返回空字典。
+    """
+    cols = dict(DEFAULT_CONTENT_COLS)
+    if column_map:
+        cols.update(column_map)
+    if df is None or len(df) < 5:
+        return {}
+    if cols["reads"] not in df.columns:
+        raise ValueError(f"缺必要列 {cols['reads']}")
+
+    df = df.copy()
+    df["_engagement"] = (df.get(cols["likes"], 0).fillna(0)
+                         + df.get(cols["comments"], 0).fillna(0)
+                         + df.get(cols["shares"], 0).fillna(0))
+    df["_engagement_rate"] = df["_engagement"] / df[cols["reads"]].replace(0, np.nan)
+
+    thresh = float(df["_engagement_rate"].quantile(1 - top_percent))
+    viral = df[df["_engagement_rate"] >= thresh]
+    normal = df[df["_engagement_rate"] < thresh]
+
+    def _title_len(sub: pd.DataFrame) -> Optional[float]:
+        if cols["title"] not in sub.columns or len(sub) == 0:
+            return None
+        return float(sub[cols["title"]].astype(str).str.len().mean())
+
+    def _peak_hours(sub: pd.DataFrame) -> List[int]:
+        if cols["publish_time"] not in sub.columns or len(sub) == 0:
+            return []
+        hours = pd.to_datetime(sub[cols["publish_time"]], errors="coerce").dt.hour.dropna()
+        if len(hours) == 0:
+            return []
+        return [int(h) for h in hours.mode().tolist()]
+
+    def _top_keywords(sub: pd.DataFrame, k: int = 10) -> List[str]:
+        if cols["keywords"] not in sub.columns or len(sub) == 0:
+            return []
+        bag: List[str] = []
+        for kw in sub[cols["keywords"]].dropna():
+            if isinstance(kw, str):
+                # 兼容中英文逗号
+                parts = kw.replace("，", ",").split(",")
+                bag.extend(p.strip() for p in parts if p.strip())
+        if not bag:
+            return []
+        return pd.Series(bag).value_counts().head(k).index.tolist()
+
+    def _type_dist(sub: pd.DataFrame) -> Dict[str, int]:
+        if cols["type"] not in sub.columns or len(sub) == 0:
+            return {}
+        return {str(k): int(v) for k, v in sub[cols["type"]].value_counts().items()}
+
+    return {
+        "viral_threshold": thresh,
+        "n_viral": int(len(viral)),
+        "n_normal": int(len(normal)),
+        "viral_title_avg_length": _title_len(viral),
+        "normal_title_avg_length": _title_len(normal),
+        "viral_peak_hours": _peak_hours(viral),
+        "viral_top_keywords": _top_keywords(viral),
+        "viral_content_type_dist": _type_dist(viral),
+    }
+
+
 # --- 粉丝增长 ---------------------------------------------------------------
 
 @dataclass
@@ -303,3 +411,94 @@ def summarize_sentiment(comments_df: pd.DataFrame,
         positive_pct=float(n_pos / n * 100) if n else 0.0,
         negative_pct=float(n_neg / n * 100) if n else 0.0,
     )
+
+
+def sentiment_trend(comments_df: pd.DataFrame,
+                    score_col: str = "sentiment_score",
+                    date_col: str = "date",
+                    pos_threshold: float = 0.6) -> List[Dict]:
+    """按天汇总情感：每天的平均分 / 评论数 / 正向占比。
+
+    需要评论表里有日期列和打好分的列。返回按日期升序的列表。
+    """
+    if comments_df is None or len(comments_df) == 0:
+        raise ValueError("评论 DataFrame 为空")
+    for c in (score_col, date_col):
+        if c not in comments_df.columns:
+            raise ValueError(f"缺 {c} 列")
+
+    df = comments_df[[date_col, score_col]].copy()
+    df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
+    df = df.dropna(subset=[date_col, score_col])
+
+    out = []
+    for day, group in df.groupby(df[date_col].dt.date):
+        scores = group[score_col]
+        n = int(len(scores))
+        out.append({
+            "date": str(day),
+            "n_comments": n,
+            "mean_score": float(scores.mean()),
+            "positive_pct": float((scores >= pos_threshold).mean() * 100) if n else 0.0,
+        })
+    out.sort(key=lambda r: r["date"])
+    return out
+
+
+def keyword_sentiment(comments_df: pd.DataFrame,
+                      keywords: List[str],
+                      text_col: str = "comment",
+                      score_col: str = "sentiment_score",
+                      pos_threshold: float = 0.6,
+                      neg_threshold: float = 0.4) -> Dict[str, Dict]:
+    """统计每个关键词命中的评论的情感表现。
+
+    用于定位「哪些话题/产品点正向、哪些负向」。只返回有命中的关键词。
+    """
+    if comments_df is None or len(comments_df) == 0:
+        raise ValueError("评论 DataFrame 为空")
+    for c in (text_col, score_col):
+        if c not in comments_df.columns:
+            raise ValueError(f"缺 {c} 列")
+
+    df = comments_df
+    out: Dict[str, Dict] = {}
+    for kw in keywords:
+        if not kw:
+            continue
+        mask = df[text_col].astype(str).str.contains(kw, na=False, case=False, regex=False)
+        hit = df.loc[mask, score_col].dropna()
+        n = int(len(hit))
+        if n == 0:
+            continue
+        out[kw] = {
+            "n_comments": n,
+            "mean_score": float(hit.mean()),
+            "positive_pct": float((hit >= pos_threshold).mean() * 100),
+            "negative_pct": float((hit <= neg_threshold).mean() * 100),
+        }
+    return out
+
+
+def top_negative_comments(comments_df: pd.DataFrame,
+                          text_col: str = "comment",
+                          score_col: str = "sentiment_score",
+                          neg_threshold: float = 0.4,
+                          top_n: int = 10) -> List[Dict]:
+    """挑出情感分最低的负面评论，供人工排查口碑风险。
+
+    返回按分数升序（最差在前）的最多 top_n 条记录。
+    """
+    if comments_df is None or len(comments_df) == 0:
+        raise ValueError("评论 DataFrame 为空")
+    for c in (text_col, score_col):
+        if c not in comments_df.columns:
+            raise ValueError(f"缺 {c} 列")
+
+    df = comments_df[[text_col, score_col]].copy()
+    df = df.dropna(subset=[score_col])
+    neg = df[df[score_col] <= neg_threshold].sort_values(score_col).head(top_n)
+    return [
+        {"comment": str(row[text_col]), "score": float(row[score_col])}
+        for _, row in neg.iterrows()
+    ]

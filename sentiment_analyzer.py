@@ -3,6 +3,7 @@
 使用 SnowNLP 分析评论情感倾向
 """
 
+import sys
 import pandas as pd
 import numpy as np
 from typing import Dict, List, Tuple
@@ -115,8 +116,8 @@ class SentimentAnalyzer:
         # 清洗文本
         df['cleaned_comment'] = df[comment_col].apply(self.clean_text)
         
-        # 分析情感
-        print("正在分析情感...")
+        # 分析情感（进度提示走 stderr，避免污染 stdout 的结构化输出）
+        print("正在分析情感...", file=sys.stderr)
         df['sentiment_score'] = df['cleaned_comment'].apply(self.analyze_sentiment)
         
         # 情感分类
@@ -358,9 +359,9 @@ class SentimentAnalyzer:
 ### 分析结论
 """
         if dist['avg_score'] > 0.6:
-            report += "整体评论情感偏向积极，用户对内容满意度较高。✓\n"
+            report += "整体评论情感偏向积极，用户对内容满意度较高。\n"
         elif dist['avg_score'] < 0.4:
-            report += "整体评论情感偏向消极，需要关注用户反馈并改进。⚠️\n"
+            report += "整体评论情感偏向消极，需要关注用户反馈并改进。\n"
         else:
             report += "整体评论情感中性，用户反馈较为平淡。\n"
         
@@ -406,7 +407,7 @@ def test_sentiment_analyzer():
     report = analyzer.generate_report()
     assert '情感分析报告' in report, "报告生成失败"
     
-    print("✓ 情感分析器测试通过")
+    print("[OK] 情感分析器测试通过")
     return True
 
 

@@ -22,7 +22,7 @@ from sentiment_analyzer import SentimentAnalyzer
 # 页面配置
 st.set_page_config(
     page_title="社交媒体分析平台",
-    page_icon="📊",
+    page_icon="bar_chart",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -98,22 +98,22 @@ def main():
     """主函数"""
     
     # 标题
-    st.markdown('<div class="main-header">📊 社交媒体分析平台</div>', unsafe_allow_html=True)
+    st.markdown('<div class="main-header">社交媒体分析平台</div>', unsafe_allow_html=True)
     st.markdown("### 多平台数据整合 · 智能分析 · 运营优化")
     st.markdown("---")
     
     # 侧边栏
-    st.sidebar.title("🎯 功能导航")
+    st.sidebar.title("功能导航")
     
     # 功能选择
     features = st.sidebar.radio(
         "选择功能模块",
-        ["📈 数据概览", "📝 内容分析", "👥 粉丝分析", "💬 情感分析", "📊 竞品对比", "📋 报告导出"],
+        ["数据概览", "内容分析", "粉丝分析", "情感分析", "竞品对比", "报告导出"],
         label_visibility="collapsed"
     )
     
     st.sidebar.markdown("---")
-    st.sidebar.markdown("### 📁 数据管理")
+    st.sidebar.markdown("### 数据管理")
     
     # 数据上传选项
     data_source = st.sidebar.radio(
@@ -128,7 +128,7 @@ def main():
     
     if data_source == "使用示例数据":
         content_data, fan_data, comment_data = generate_sample_data()
-        st.sidebar.success("✓ 已加载示例数据")
+        st.sidebar.success("已加载示例数据")
     else:
         uploaded_content = st.sidebar.file_uploader("上传内容数据 (CSV)", type=['csv'])
         uploaded_fan = st.sidebar.file_uploader("上传粉丝数据 (CSV)", type=['csv'])
@@ -143,7 +143,7 @@ def main():
     
     # 平台筛选
     st.sidebar.markdown("---")
-    st.sidebar.markdown("### 🔍 数据筛选")
+    st.sidebar.markdown("### 数据筛选")
     platforms = st.sidebar.multiselect(
         "选择平台",
         ["微信", "微博", "抖音", "小红书"],
@@ -157,23 +157,23 @@ def main():
         comment_data = comment_data[comment_data['platform'].isin(platforms)]
     
     # 主内容区域
-    if features == "📈 数据概览":
+    if features == "数据概览":
         show_overview(content_data, fan_data, comment_data)
-    elif features == "📝 内容分析":
+    elif features == "内容分析":
         show_content_analysis(content_data)
-    elif features == "👥 粉丝分析":
+    elif features == "粉丝分析":
         show_fan_analysis(fan_data)
-    elif features == "💬 情感分析":
+    elif features == "情感分析":
         show_sentiment_analysis(comment_data)
-    elif features == "📊 竞品对比":
+    elif features == "竞品对比":
         show_competitor_analysis(content_data, fan_data)
-    elif features == "📋 报告导出":
+    elif features == "报告导出":
         show_report_export(content_data, fan_data, comment_data)
 
 
 def show_overview(content_data, fan_data, comment_data):
     """显示数据概览"""
-    st.header("📈 数据概览")
+    st.header("数据概览")
     
     if content_data is None or fan_data is None:
         st.warning("请先加载数据")
@@ -232,7 +232,7 @@ def show_overview(content_data, fan_data, comment_data):
             st.plotly_chart(fig, use_container_width=True)
     
     # 趋势图
-    st.subheader("📊 粉丝增长趋势")
+    st.subheader("粉丝增长趋势")
     if fan_data is not None:
         fan_analyzer = FanAnalyzer(fan_data)
         fig = fan_analyzer.create_growth_chart()
@@ -241,7 +241,7 @@ def show_overview(content_data, fan_data, comment_data):
 
 def show_content_analysis(content_data):
     """显示内容分析"""
-    st.header("📝 内容分析")
+    st.header("内容分析")
     
     if content_data is None:
         st.warning("请先加载内容数据")
@@ -269,7 +269,7 @@ def show_content_analysis(content_data):
     st.markdown("---")
     
     # 爆款内容特征
-    st.subheader("🔥 爆款内容特征")
+    st.subheader("爆款内容特征")
     features = analyzer.analyze_content_features()
     
     if features:
@@ -283,7 +283,7 @@ def show_content_analysis(content_data):
                 st.write("**爆款发布高峰时段**:", f"{features['viral_peak_hours'][0] if features['viral_peak_hours'] else 'N/A'}:00")
     
     # 内容表现图表
-    st.subheader("📊 内容表现 TOP20")
+    st.subheader("内容表现 TOP20")
     fig = analyzer.create_performance_chart()
     st.plotly_chart(fig, use_container_width=True)
     
@@ -301,7 +301,7 @@ def show_content_analysis(content_data):
         st.info("时间分析需要 publish_time 列")
     
     # 爆款内容列表
-    st.subheader("🌟 爆款内容列表")
+    st.subheader("爆款内容列表")
     viral_content = analyzer.identify_viral_content()
     if len(viral_content) > 0:
         display_cols = ['content_id', 'title', 'reads', 'likes', 'comments', 'shares', 'engagement_rate']
@@ -311,7 +311,7 @@ def show_content_analysis(content_data):
 
 def show_fan_analysis(fan_data):
     """显示粉丝分析"""
-    st.header("👥 粉丝分析")
+    st.header("粉丝分析")
     
     if fan_data is None:
         st.warning("请先加载粉丝数据")
@@ -321,7 +321,7 @@ def show_fan_analysis(fan_data):
     analyzer = FanAnalyzer(fan_data)
     
     # 增长指标
-    st.subheader("📈 增长指标")
+    st.subheader("增长指标")
     metrics = analyzer.calculate_growth_metrics()
     
     col1, col2, col3, col4 = st.columns(4)
@@ -337,12 +337,12 @@ def show_fan_analysis(fan_data):
     st.markdown("---")
     
     # 粉丝增长趋势图
-    st.subheader("📊 粉丝增长趋势")
+    st.subheader("粉丝增长趋势")
     fig = analyzer.create_growth_chart()
     st.plotly_chart(fig, use_container_width=True)
     
     # 粉丝画像
-    st.subheader("👤 粉丝画像")
+    st.subheader("粉丝画像")
     demo = analyzer.analyze_demographics()
     
     if demo:
@@ -375,7 +375,7 @@ def show_fan_analysis(fan_data):
 
 def show_sentiment_analysis(comment_data):
     """显示情感分析"""
-    st.header("💬 情感分析")
+    st.header("情感分析")
     
     if comment_data is None:
         st.warning("请先加载评论数据")
@@ -389,7 +389,7 @@ def show_sentiment_analysis(comment_data):
         df = analyzer.analyze_batch()
     
     # 情感分布
-    st.subheader("📊 情感分布")
+    st.subheader("情感分布")
     dist = analyzer.sentiment_distribution()
     
     col1, col2, col3 = st.columns(3)
@@ -417,12 +417,12 @@ def show_sentiment_analysis(comment_data):
             st.info("趋势图需要 date 列")
     
     # 情感报告
-    st.subheader("📋 分析报告")
+    st.subheader("分析报告")
     report = analyzer.generate_report()
     st.markdown(report)
     
     # 负面反馈
-    st.subheader("⚠️ 负面反馈 TOP10")
+    st.subheader("负面反馈 TOP10")
     negative_feedback = analyzer.extract_negative_feedback()
     if len(negative_feedback) > 0:
         st.dataframe(negative_feedback[['comment', 'sentiment_score']], use_container_width=True)
@@ -430,17 +430,17 @@ def show_sentiment_analysis(comment_data):
 
 def show_competitor_analysis(content_data, fan_data):
     """显示竞品对比分析"""
-    st.header("📊 竞品对比分析")
+    st.header("竞品对比分析")
     
     if content_data is None:
         st.warning("请先加载数据")
         return
     
-    st.info("💡 提示：上传多个账号的数据进行对比分析")
+    st.info("提示：上传多个账号的数据进行对比分析")
     
     # 按平台对比
     if 'platform' in content_data.columns:
-        st.subheader("📱 各平台表现对比")
+        st.subheader("各平台表现对比")
         
         platform_metrics = content_data.groupby('platform').agg({
             'reads': ['mean', 'sum'],
@@ -463,7 +463,7 @@ def show_competitor_analysis(content_data, fan_data):
     
     # 内容类型对比
     if 'content_type' in content_data.columns:
-        st.subheader("📝 内容类型对比")
+        st.subheader("内容类型对比")
         
         type_metrics = content_data.groupby('content_type').agg({
             'reads': 'mean',
@@ -475,13 +475,13 @@ def show_competitor_analysis(content_data, fan_data):
 
 def show_report_export(content_data, fan_data, comment_data):
     """显示报告导出功能"""
-    st.header("📋 报告导出")
+    st.header("报告导出")
     
     if content_data is None:
         st.warning("请先加载数据")
         return
     
-    st.subheader("📊 生成运营报告")
+    st.subheader("生成运营报告")
     
     # 报告内容选择
     report_sections = st.multiselect(
@@ -494,7 +494,7 @@ def show_report_export(content_data, fan_data, comment_data):
         report = generate_report(content_data, fan_data, comment_data, report_sections)
         
         st.download_button(
-            label="📥 下载报告 (Markdown)",
+            label="下载报告 (Markdown)",
             data=report,
             file_name=f"社交媒体运营报告_{datetime.now().strftime('%Y%m%d')}.md",
             mime="text/markdown"

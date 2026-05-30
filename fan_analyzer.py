@@ -319,7 +319,7 @@ def test_fan_analyzer():
     demo = analyzer.analyze_demographics()
     assert 'gender_dist' in demo, "画像分析失败"
     
-    print("✓ 粉丝分析器测试通过")
+    print("[OK] 粉丝分析器测试通过")
     return True
 
 

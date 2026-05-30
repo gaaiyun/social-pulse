@@ -1,11 +1,14 @@
-"""Social-Media-Analytics CLI（v2）。
+"""social-pulse 命令行入口。
+
+中文社媒内容分析：内容表现 / 平台对比 / 粉丝画像 / 中文情感（SnowNLP）/ 运营洞察。
 
 子命令：
     content     内容表现统计 + 平台 / 内容类型分解
-    fan         粉丝增长 + 人口学分布
-    sentiment   评论情感汇总（需要先用 v1 SentimentAnalyzer 算 sentiment_score）
-    insights    LLM 或规则综合洞察报告
-    list-models 列 LLM backend
+    timing      发布时段分析 + 爆款特征拆解
+    fan         粉丝增长 + 人口学画像
+    sentiment   评论情感汇总（含日趋势 / 关键词情感 / 负面反馈提取）
+    insights    规则或 LLM 综合运营洞察报告
+    list-models 列出可用的 LLM backend
 """
 from __future__ import annotations
 
@@ -21,9 +24,20 @@ import pandas as pd
 from headless_analytics import (
     compute_content_metrics, compute_fan_growth,
     content_type_breakdown, demographic_breakdown,
-    platform_breakdown, summarize_sentiment,
+    keyword_sentiment, platform_breakdown, posting_time_analysis,
+    sentiment_trend, summarize_sentiment, top_negative_comments,
+    viral_features,
 )
 from llm_insights import LLMClient, generate_insights
+
+
+def _emit(payload, output: str) -> None:
+    """统一输出：打到 stdout，并按需写文件。"""
+    text = json.dumps(payload, ensure_ascii=False, indent=2)
+    print(text)
+    if output:
+        Path(output).parent.mkdir(parents=True, exist_ok=True)
+        Path(output).write_text(text, encoding="utf-8")
 
 
 def _load_csv(path: str) -> pd.DataFrame:
@@ -36,46 +50,50 @@ def _load_csv(path: str) -> pd.DataFrame:
 
 def cmd_content(args) -> int:
     df = _load_csv(args.csv)
-    metrics = compute_content_metrics(df)
-    platforms = platform_breakdown(df)
-    types = content_type_breakdown(df)
     payload = {
-        "metrics": metrics.to_dict(),
-        "platform_breakdown": platforms,
-        "content_type_breakdown": types,
+        "metrics": compute_content_metrics(df).to_dict(),
+        "platform_breakdown": platform_breakdown(df),
+        "content_type_breakdown": content_type_breakdown(df),
     }
-    print(json.dumps(payload, ensure_ascii=False, indent=2))
-    if args.output:
-        Path(args.output).parent.mkdir(parents=True, exist_ok=True)
-        Path(args.output).write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    _emit(payload, args.output)
+    return 0
+
+
+def cmd_timing(args) -> int:
+    df = _load_csv(args.csv)
+    payload = {
+        "posting_time": posting_time_analysis(df),
+        "viral_features": viral_features(df, top_percent=args.top_percent),
+    }
+    _emit(payload, args.output)
     return 0
 
 
 def cmd_fan(args) -> int:
     df = _load_csv(args.csv)
-    growth = compute_fan_growth(df)
-    demo = demographic_breakdown(df)
-    payload = {"growth": growth.to_dict(), "demographics": demo}
-    print(json.dumps(payload, ensure_ascii=False, indent=2))
-    if args.output:
-        Path(args.output).parent.mkdir(parents=True, exist_ok=True)
-        Path(args.output).write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    payload = {
+        "growth": compute_fan_growth(df).to_dict(),
+        "demographics": demographic_breakdown(df),
+    }
+    _emit(payload, args.output)
     return 0
 
 
 def cmd_sentiment(args) -> int:
     df = _load_csv(args.csv)
     if args.score_col not in df.columns:
-        # 需要先用 v1 SentimentAnalyzer 算
+        # CSV 没有打好分的列，用 SnowNLP 现场批量打分。
+        # analyze_batch 才是返回 DataFrame 的批量接口；analyze_sentiment 只接受单条文本。
         sys.stderr.write(
-            f"[info] CSV 没有 {args.score_col} 列；用 v1 SentimentAnalyzer 现场算\n"
+            f"[info] CSV 没有 {args.score_col} 列；用 SnowNLP 现场逐条算\n"
         )
         try:
             from sentiment_analyzer import SentimentAnalyzer
             analyzer = SentimentAnalyzer(df)
-            df = analyzer.analyze_sentiment(text_col=args.text_col)
+            df = analyzer.analyze_batch(comment_col=args.text_col)
+            # analyze_batch 固定写入 sentiment_score 列；若用户指定了别的列名，做一次别名。
+            if args.score_col != "sentiment_score" and "sentiment_score" in df.columns:
+                df[args.score_col] = df["sentiment_score"]
         except Exception as e:
             sys.stderr.write(f"[error] 现场算失败：{e}\n")
             return 2
@@ -83,12 +101,31 @@ def cmd_sentiment(args) -> int:
     summary = summarize_sentiment(df, score_col=args.score_col,
                                   pos_threshold=args.pos_threshold,
                                   neg_threshold=args.neg_threshold)
-    print(json.dumps(summary.to_dict(), ensure_ascii=False, indent=2))
-    if args.output:
-        Path(args.output).parent.mkdir(parents=True, exist_ok=True)
-        Path(args.output).write_text(
-            json.dumps(summary.to_dict(), ensure_ascii=False, indent=2),
-            encoding="utf-8")
+    payload = {"summary": summary.to_dict()}
+
+    if args.trend:
+        try:
+            payload["daily_trend"] = sentiment_trend(
+                df, score_col=args.score_col, date_col=args.date_col,
+                pos_threshold=args.pos_threshold)
+        except ValueError as e:
+            sys.stderr.write(f"[warn] 日趋势跳过：{e}\n")
+
+    if args.keywords:
+        kws = [k.strip() for k in args.keywords.split(",") if k.strip()]
+        payload["keyword_sentiment"] = keyword_sentiment(
+            df, kws, text_col=args.text_col, score_col=args.score_col,
+            pos_threshold=args.pos_threshold, neg_threshold=args.neg_threshold)
+
+    if args.top_negative > 0:
+        try:
+            payload["top_negative"] = top_negative_comments(
+                df, text_col=args.text_col, score_col=args.score_col,
+                neg_threshold=args.neg_threshold, top_n=args.top_negative)
+        except ValueError as e:
+            sys.stderr.write(f"[warn] 负面评论提取跳过：{e}\n")
+
+    _emit(payload, args.output)
     return 0
 
 
@@ -108,9 +145,10 @@ def cmd_insights(args) -> int:
         if "sentiment_score" not in cdf.columns:
             try:
                 from sentiment_analyzer import SentimentAnalyzer
-                cdf = SentimentAnalyzer(cdf).analyze_sentiment()
-            except Exception:
-                pass
+                # analyze_batch 才会写出 sentiment_score 列；analyze_sentiment 只算单条。
+                cdf = SentimentAnalyzer(cdf).analyze_batch()
+            except Exception as e:
+                sys.stderr.write(f"[warn] 评论情感现场算失败，洞察将不含情感：{e}\n")
         if "sentiment_score" in cdf.columns:
             sent_m = summarize_sentiment(cdf).to_dict()
 
@@ -156,26 +194,39 @@ def cmd_list_models(args) -> int:
 
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        prog="smm", description="社媒数据 headless 分析 + LLM 洞察"
+        prog="social-pulse",
+        description="中文社媒内容分析：内容表现 / 平台对比 / 粉丝画像 / 中文情感 / 运营洞察",
     )
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    sp = sub.add_parser("content", help="内容表现统计")
+    sp = sub.add_parser("content", help="内容表现统计 + 平台 / 内容类型分解")
     sp.add_argument("csv")
     sp.add_argument("-o", "--output")
     sp.set_defaults(func=cmd_content)
 
-    sp = sub.add_parser("fan", help="粉丝增长 + 人口学")
+    sp = sub.add_parser("timing", help="发布时段分析 + 爆款特征拆解")
+    sp.add_argument("csv")
+    sp.add_argument("--top-percent", type=float, default=0.2,
+                    help="爆款判定：互动率前百分之多少（默认 0.2）")
+    sp.add_argument("-o", "--output")
+    sp.set_defaults(func=cmd_timing)
+
+    sp = sub.add_parser("fan", help="粉丝增长 + 人口学画像")
     sp.add_argument("csv")
     sp.add_argument("-o", "--output")
     sp.set_defaults(func=cmd_fan)
 
-    sp = sub.add_parser("sentiment", help="评论情感汇总")
+    sp = sub.add_parser("sentiment", help="评论情感汇总 + 日趋势 / 关键词 / 负面提取")
     sp.add_argument("csv")
     sp.add_argument("--score-col", default="sentiment_score")
     sp.add_argument("--text-col", default="comment")
+    sp.add_argument("--date-col", default="date")
     sp.add_argument("--pos-threshold", type=float, default=0.6)
     sp.add_argument("--neg-threshold", type=float, default=0.4)
+    sp.add_argument("--trend", action="store_true", help="附带按天情感趋势")
+    sp.add_argument("--keywords", help="逗号分隔的关键词，统计各自情感")
+    sp.add_argument("--top-negative", type=int, default=0,
+                    help="附带情感最低的 N 条负面评论（默认 0=不输出）")
     sp.add_argument("-o", "--output")
     sp.set_defaults(func=cmd_sentiment)
 
