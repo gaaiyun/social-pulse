@@ -40,6 +40,24 @@ DEFAULT_COMMENT_COLS = {
 }
 
 
+def _series_or_zero(df: pd.DataFrame, column: str) -> pd.Series:
+    if column in df.columns:
+        return df[column].fillna(0)
+    return pd.Series(0, index=df.index, dtype="float64")
+
+
+def _add_engagement_columns(df: pd.DataFrame, cols: Dict) -> None:
+    df["_engagement"] = (
+        _series_or_zero(df, cols["likes"])
+        + _series_or_zero(df, cols["comments"])
+        + _series_or_zero(df, cols["shares"])
+    )
+    reads = df[cols["reads"]].fillna(0)
+    df["_engagement_rate"] = (
+        df["_engagement"].div(reads.where(reads.ne(0))).fillna(0.0)
+    )
+
+
 # --- 内容表现 ---------------------------------------------------------------
 
 @dataclass
@@ -71,10 +89,7 @@ def compute_content_metrics(df: pd.DataFrame,
             raise ValueError(f"缺必要列 {required}")
 
     df = df.copy()
-    df["_engagement"] = (df.get(cols["likes"], 0).fillna(0)
-                         + df.get(cols["comments"], 0).fillna(0)
-                         + df.get(cols["shares"], 0).fillna(0))
-    df["_engagement_rate"] = df["_engagement"] / df[cols["reads"]].replace(0, np.nan)
+    _add_engagement_columns(df, cols)
 
     total_reads = int(df[cols["reads"]].sum())
     total_eng = int(df["_engagement"].sum())
@@ -103,10 +118,17 @@ def compute_content_metrics(df: pd.DataFrame,
             top_platform = str(plat_reads.idxmax())
             top_platform_reads = int(plat_reads.max())
 
-    # Viral threshold = top 20%
-    if n_posts >= 5:
-        viral_thresh = float(df["_engagement_rate"].quantile(0.8, interpolation="linear"))
-        n_viral = int((df["_engagement_rate"] >= viral_thresh).sum())
+    # 没有曝光时，互动率被定义为 0 只为保证 JSON 有限，不能据此判成爆款。
+    eligible_for_viral = df[df[cols["reads"]].fillna(0) > 0]
+    if len(eligible_for_viral) >= 5:
+        viral_thresh = float(
+            eligible_for_viral["_engagement_rate"].quantile(
+                0.8, interpolation="linear"
+            )
+        )
+        n_viral = int(
+            (eligible_for_viral["_engagement_rate"] >= viral_thresh).sum()
+        )
     else:
         viral_thresh = 0.0
         n_viral = 0
@@ -129,10 +151,7 @@ def platform_breakdown(df: pd.DataFrame,
         return {}
 
     df = df.copy()
-    df["_engagement"] = (df.get(cols["likes"], 0).fillna(0)
-                         + df.get(cols["comments"], 0).fillna(0)
-                         + df.get(cols["shares"], 0).fillna(0))
-    df["_engagement_rate"] = df["_engagement"] / df[cols["reads"]].replace(0, np.nan)
+    _add_engagement_columns(df, cols)
 
     out = {}
     for platform, group in df.groupby(cols["platform"]):
@@ -154,9 +173,7 @@ def content_type_breakdown(df: pd.DataFrame,
         return {}
 
     df = df.copy()
-    df["_engagement"] = (df.get(cols["likes"], 0).fillna(0)
-                         + df.get(cols["comments"], 0).fillna(0)
-                         + df.get(cols["shares"], 0).fillna(0))
+    _add_engagement_columns(df, cols)
 
     out = {}
     for ctype, group in df.groupby(cols["type"]):
@@ -186,10 +203,7 @@ def posting_time_analysis(df: pd.DataFrame,
     if len(df) == 0:
         return {}
 
-    df["_engagement"] = (df.get(cols["likes"], 0).fillna(0)
-                         + df.get(cols["comments"], 0).fillna(0)
-                         + df.get(cols["shares"], 0).fillna(0))
-    df["_engagement_rate"] = df["_engagement"] / df[cols["reads"]].replace(0, np.nan)
+    _add_engagement_columns(df, cols)
 
     df["_hour"] = df["_dt"].dt.hour
     df["_dow"] = df["_dt"].dt.dayofweek
@@ -222,10 +236,10 @@ def viral_features(df: pd.DataFrame,
         raise ValueError(f"缺必要列 {cols['reads']}")
 
     df = df.copy()
-    df["_engagement"] = (df.get(cols["likes"], 0).fillna(0)
-                         + df.get(cols["comments"], 0).fillna(0)
-                         + df.get(cols["shares"], 0).fillna(0))
-    df["_engagement_rate"] = df["_engagement"] / df[cols["reads"]].replace(0, np.nan)
+    _add_engagement_columns(df, cols)
+    df = df[df[cols["reads"]].fillna(0) > 0]
+    if len(df) < 5:
+        return {}
 
     thresh = float(df["_engagement_rate"].quantile(1 - top_percent))
     viral = df[df["_engagement_rate"] >= thresh]
@@ -286,9 +300,13 @@ class FanGrowthMetrics:
     net_growth: int
     starting_fans: int
     ending_fans: int
-    growth_pct: float        # (ending - starting) / starting
+    growth_pct: float        # 可观测净流量 / 起始存量
     daily_net_avg: float
     churn_rate: float        # unfollows / starting_fans
+    stock_flow_check_available: bool
+    stock_flow_consistent: Optional[bool]
+    stock_flow_gap: Optional[int]
+    max_abs_stock_flow_gap: Optional[int]
 
     def to_dict(self) -> dict:
         return {k: (v if not isinstance(v, (np.integer, np.floating))
@@ -315,12 +333,30 @@ def compute_fan_growth(df: pd.DataFrame,
     total_unf = int(df[cols["unfollows"]].sum())
     net = total_new - total_unf
 
-    starting = int(df[cols["total_fans"]].iloc[0]) if cols["total_fans"] in df.columns else 0
-    ending = int(df[cols["total_fans"]].iloc[-1]) if cols["total_fans"] in df.columns else 0
+    daily_net = df[cols["new_fans"]] - df[cols["unfollows"]]
+    if cols["total_fans"] in df.columns:
+        first_net = int(
+            daily_net.iloc[0]
+        )
+        starting = int(df[cols["total_fans"]].iloc[0]) - first_net
+        ending = int(df[cols["total_fans"]].iloc[-1])
+        expected_stock = starting + daily_net.cumsum()
+        gaps = df[cols["total_fans"]] - expected_stock
+        stock_flow_check_available = True
+        stock_flow_gap = int(gaps.iloc[-1])
+        max_abs_stock_flow_gap = int(gaps.abs().max())
+        stock_flow_consistent = bool(gaps.eq(0).all())
+    else:
+        starting = 0
+        ending = net
+        stock_flow_check_available = False
+        stock_flow_gap = None
+        max_abs_stock_flow_gap = None
+        stock_flow_consistent = None
 
     growth_pct = 0.0
     if starting > 0:
-        growth_pct = float((ending - starting) / starting * 100)
+        growth_pct = float(net / starting * 100)
 
     daily_net_avg = float(net / n_days) if n_days else 0.0
     churn = float(total_unf / starting * 100) if starting else 0.0
@@ -334,6 +370,10 @@ def compute_fan_growth(df: pd.DataFrame,
         starting_fans=starting, ending_fans=ending,
         growth_pct=growth_pct, daily_net_avg=daily_net_avg,
         churn_rate=churn,
+        stock_flow_check_available=stock_flow_check_available,
+        stock_flow_consistent=stock_flow_consistent,
+        stock_flow_gap=stock_flow_gap,
+        max_abs_stock_flow_gap=max_abs_stock_flow_gap,
     )
 
 

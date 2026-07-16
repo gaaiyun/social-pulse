@@ -20,24 +20,24 @@
 
 ## 两种用法
 
-工具有两层：一层是命令行（`__main__.py`，纯 pandas，能脚本化 / 进定时任务），
+工具有两层：一层是 `social-pulse` 命令行（纯 pandas，能脚本化 / 进定时任务），
 一层是 Streamlit 交互仪表板（`dashboard.py`，带图表和筛选）。指标算法两边一致，
 要图形界面用仪表板，要自动化出报表用命令行。
 
 ## 安装
 
 ```bash
-pip install -r requirements.txt
-# 可选：运营洞察走 LLM 时才需要
-pip install openai       # openai / deepseek 共用
-pip install anthropic
+pip install -e .
+# 中文情感、仪表板和 LLM 按需安装
+pip install -e ".[sentiment,dashboard,llm]"
 ```
 
-依赖 Python 3.10+。情感分析需要 `snownlp`（已在 requirements 里）。
+依赖 Python 3.10+。也可继续用 `pip install -r requirements.txt` 安装完整本地开发环境。
+OpenAI、Anthropic、DeepSeek 分别读取各自的环境变量，不跨 provider 复用 key。
 
 ## 命令行
 
-所有子命令默认读 `sample_data/` 下自带的示例数据，离线即可跑通。Windows 终端如遇
+所有子命令都可直接读取 `sample_data/` 下自带的示例数据，离线即可跑通。Windows 终端如遇
 中文乱码，前面加 `set PYTHONIOENCODING=utf-8`（PowerShell：`$env:PYTHONIOENCODING="utf-8"`）。
 
 ```bash
@@ -64,6 +64,9 @@ python __main__.py insights sample_data/content_sample.csv \
 
 # 查看 LLM backend 配置状态
 python __main__.py list-models
+
+# 安装后可直接使用同一组子命令
+social-pulse fan sample_data/fan_sample.csv
 ```
 
 每个子命令都支持 `-o/--output` 把结果写文件（JSON，`insights` 可选 markdown）。
@@ -77,7 +80,7 @@ $ python __main__.py insights sample_data/content_sample.csv \
 
 ## 整体概览
 
-发布 100 篇内容，总阅读 5,251,886，平均互动率 27.60%，粉丝净增 +6523（+80.3%），
+发布 100 篇内容，总阅读 5,251,886，平均互动率 27.60%，粉丝净增 +6523（+65.2%），
 评论情感正向 50% / 负向 36%。
 
 ## 内容运营建议
@@ -92,7 +95,7 @@ $ python __main__.py insights sample_data/content_sample.csv \
 
 ## 风险关注
 
-- 流失率 18.0%，需排查内容方向 / 互动质量
+- 流失率 18.8%，需排查内容方向 / 互动质量
 - 评论负向占比 36%，关注客服 / 产品反馈
 ```
 
@@ -183,7 +186,10 @@ dict / list，方便接到任何下游。
   `headless_analytics.py` 用纯 pandas 重算同样的指标，命令行和定时任务调它。
 - **情感打分本地化**：用 SnowNLP，不调任何在线接口，离线可跑；代价是只支持中文。
 - **运营洞察缺 key 不报错**：没配 LLM key 时退回规则启发式，仍覆盖高流失、负增长、
-  负面情感、低互动、爆款复盘五类信号，保证拿得到基线建议。
+  负面情感、低互动、爆款复盘和粉丝存量冲突；JSON 与 Markdown 会披露 fallback 原因。
+- **粉丝存量可审计**：提供 `total_fans` 时，输出期末 stock-flow gap、最大日 gap 和一致性；
+  未提供存量列时明确标记为不可校验，不把净流量冒充真实账号存量。
+- **零曝光不算爆款**：零阅读内容的互动率返回有限的 0，保证标准 JSON；但不会进入爆款分位数。
 - **编码兼容 BOM**：示例 CSV 以 BOM 开头，命令行先试 `utf-8-sig` 再退 `utf-8`。
 - **进度提示走 stderr**：SnowNLP 批量打分的进度行打到 stderr，stdout 只留结构化 JSON，
   方便 `| jq` 或重定向。
@@ -194,7 +200,7 @@ dict / list，方便接到任何下游。
 python -m pytest tests/ -q -o addopts=""
 ```
 
-108 个测试，约 5 秒跑完。覆盖纯 pandas 分析函数、规则洞察（LLM 路径用 mock，无网络
+128 个测试，约 5 秒跑完。覆盖纯 pandas 分析函数、stock-flow 守恒、规则洞察（LLM 路径用 mock，无网络
 依赖）、以及命令行每个子命令的端到端跑通（含此前损坏的情感回退分支回归用例）。
 
 `pyproject.toml` 默认开了覆盖率（`--cov`），需要 `pytest-cov`；不想要覆盖率就用上面的
@@ -204,7 +210,8 @@ python -m pytest tests/ -q -o addopts=""
 
 ```
 social-pulse/
-├── __main__.py              # 命令行入口（6 个子命令）
+├── social_pulse_cli.py      # 可安装命令行入口（6 个子命令）
+├── __main__.py              # 源码目录兼容入口
 ├── headless_analytics.py    # 纯 pandas 分析函数（命令行 / 库调用共用）
 ├── llm_insights.py          # 运营洞察：规则 + 可选 LLM
 ├── dashboard.py             # Streamlit 交互仪表板
@@ -213,7 +220,7 @@ social-pulse/
 ├── sentiment_analyzer.py    # SnowNLP 中文情感
 ├── generate_sample_data.py  # 生成示例数据
 ├── sample_data/             # 自带示例：content / fan / comment
-└── tests/                   # 108 个测试
+└── tests/                   # 128 个测试
 ```
 
 ## 已知限制

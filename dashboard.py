@@ -58,18 +58,20 @@ def generate_sample_data():
         'likes': np.random.randint(100, 10000, 100),
         'comments': np.random.randint(10, 1000, 100),
         'shares': np.random.randint(5, 500, 100),
-        'publish_time': pd.date_range('2024-01-01', periods=100, freq='H'),
+        'publish_time': pd.date_range('2024-01-01', periods=100, freq='h'),
         'content_type': np.random.choice(['图文', '视频', '直播'], 100),
         'keywords': np.random.choice(['科技,AI', '生活，日常', '美食，探店', '旅行，风景'], 100)
     })
     
     # 粉丝数据
     dates = pd.date_range('2024-01-01', periods=30, freq='D')
+    new_fans = np.random.randint(50, 500, 30)
+    unfollows = np.random.randint(10, 100, 30)
     fan_data = pd.DataFrame({
         'date': dates,
-        'new_fans': np.random.randint(50, 500, 30),
-        'unfollows': np.random.randint(10, 100, 30),
-        'total_fans': np.cumsum(np.random.randint(50, 500, 30)) + 10000,
+        'new_fans': new_fans,
+        'unfollows': unfollows,
+        'total_fans': 10000 + np.cumsum(new_fans - unfollows),
         'interactions': np.random.randint(100, 5000, 30),
         'gender': np.random.choice(['男', '女'], 30),
         'age': np.random.randint(18, 60, 30),

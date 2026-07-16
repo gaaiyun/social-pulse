@@ -10,6 +10,8 @@ import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
 
+from headless_analytics import compute_fan_growth
+
 
 class FanAnalyzer:
     """粉丝数据分析器"""
@@ -61,9 +63,10 @@ class FanAnalyzer:
         df[date_col] = pd.to_datetime(df[date_col])
         df = df.sort_values(date_col)
         
-        # 计算累计粉丝数
-        if 'new_fans' in df.columns:
-            df['total_fans'] = df['new_fans'].cumsum()
+        # 没有库存列时，以 0 为期初按每日净流入重建。
+        if 'total_fans' not in df.columns and 'new_fans' in df.columns:
+            unfollows = df['unfollows'] if 'unfollows' in df.columns else 0
+            df['total_fans'] = (df['new_fans'] - unfollows).cumsum()
         
         # 计算增长率
         if 'total_fans' in df.columns:
@@ -80,23 +83,15 @@ class FanAnalyzer:
         """
         df = self.analyze_growth_trend()
         
-        metrics = {}
-        
-        if 'total_fans' in df.columns:
-            metrics['total_fans'] = df['total_fans'].iloc[-1]
-            metrics['net_new_fans'] = df['total_fans'].iloc[-1] - df['total_fans'].iloc[0]
-            metrics['avg_daily_growth'] = df['total_fans'].diff().mean()
-            metrics['max_daily_growth'] = df['total_fans'].diff().max()
-            
-            # 计算增长率
-            if len(df) > 1:
-                start_fans = df['total_fans'].iloc[0]
-                end_fans = df['total_fans'].iloc[-1]
-                days = (df['date'].iloc[-1] - df['date'].iloc[0]).days
-                if days > 0 and start_fans > 0:
-                    metrics['growth_rate'] = ((end_fans - start_fans) / start_fans) * 100 / days
-                else:
-                    metrics['growth_rate'] = 0
+        growth = compute_fan_growth(df)
+        daily_net = df['new_fans'] - df['unfollows']
+        metrics = {
+            'total_fans': growth.ending_fans,
+            'net_new_fans': growth.net_growth,
+            'avg_daily_growth': growth.daily_net_avg,
+            'max_daily_growth': daily_net.max(),
+            'growth_rate': growth.growth_pct,
+        }
         
         if 'new_fans' in df.columns:
             metrics['avg_new_fans_per_day'] = df['new_fans'].mean()

@@ -55,13 +55,20 @@ class ContentAnalyzer:
         df = self.data.copy()
         
         # 确保必要的列存在
-        required_cols = ['reads', 'likes', 'comments', 'shares']
+        required_cols = ['reads', 'likes']
         for col in required_cols:
             if col not in df.columns:
                 raise ValueError(f"缺少必要的列：{col}")
+
+        for col in ('comments', 'shares'):
+            if col not in df.columns:
+                df[col] = 0
         
         # 计算互动率
-        df['engagement_rate'] = (df['likes'] + df['comments'] + df['shares']) / df['reads'].replace(0, 1) * 100
+        engagement = df['likes'] + df['comments'] + df['shares']
+        df['engagement_rate'] = (
+            engagement.div(df['reads'].replace(0, np.nan)).fillna(0) * 100
+        )
         
         return df
     
@@ -152,9 +159,9 @@ class ContentAnalyzer:
             'comments': df['comments'],
             'shares': df['shares'],
             'engagement_rate': df['engagement_rate'],
-            'like_rate': df['likes'] / df['reads'].replace(0, 1) * 100,
-            'comment_rate': df['comments'] / df['reads'].replace(0, 1) * 100,
-            'share_rate': df['shares'] / df['reads'].replace(0, 1) * 100
+            'like_rate': df['likes'].div(df['reads'].replace(0, np.nan)).fillna(0) * 100,
+            'comment_rate': df['comments'].div(df['reads'].replace(0, np.nan)).fillna(0) * 100,
+            'share_rate': df['shares'].div(df['reads'].replace(0, np.nan)).fillna(0) * 100
         })
         
         return metrics

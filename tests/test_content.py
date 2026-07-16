@@ -47,6 +47,20 @@ class TestContentAnalyzer:
         assert 'engagement_rate' in df.columns
         assert len(df) == 100
         assert all(df['engagement_rate'] >= 0)
+
+    def test_optional_comments_and_shares_default_to_zero(self):
+        data = pd.DataFrame({
+            'content_id': [1, 2],
+            'reads': [100, 200],
+            'likes': [10, 20],
+        })
+        analyzer = ContentAnalyzer(data)
+
+        metrics = analyzer.performance_metrics()
+
+        assert metrics['comments'].tolist() == [0, 0]
+        assert metrics['shares'].tolist() == [0, 0]
+        assert metrics['engagement_rate'].tolist() == [10.0, 10.0]
     
     def test_identify_viral_content(self, sample_content_data):
         """测试爆款内容识别"""
