@@ -55,23 +55,46 @@ def test_fan_subcommand(capsys):
     assert rc == 0
     payload = json.loads(out)
     assert payload["growth"]["n_days"] == 30
+    assert payload["growth"]["stock_flow_check_available"] is True
+    assert payload["growth"]["stock_flow_consistent"] is True
+    assert payload["growth"]["stock_flow_gap"] == 0
     assert "gender" in payload["demographics"]
 
 
-def test_sentiment_subcommand_with_score_col(capsys):
+def test_sentiment_subcommand_with_score_col(capsys, tmp_path):
     """评论表已有 sentiment_score 列时直接汇总，不触发 SnowNLP。"""
     import pandas as pd
-    tmp = SAMPLE / "_scored_tmp.csv"
+    tmp = tmp_path / "scored.csv"
     df = pd.read_csv(SAMPLE / "comment_sample.csv", encoding="utf-8-sig")
     df["sentiment_score"] = [0.9, 0.1] * (len(df) // 2) + [0.5] * (len(df) % 2)
     df.to_csv(tmp, index=False, encoding="utf-8-sig")
-    try:
-        rc, out = _run(["sentiment", str(tmp)], capsys)
-        assert rc == 0
-        payload = json.loads(out)
-        assert payload["summary"]["n_comments"] == len(df)
-    finally:
-        tmp.unlink(missing_ok=True)
+    rc, out = _run(["sentiment", str(tmp)], capsys)
+    assert rc == 0
+    payload = json.loads(out)
+    assert payload["summary"]["n_comments"] == len(df)
+
+
+def test_content_subcommand_optional_columns_and_zero_reads(capsys, tmp_path):
+    """comments/shares 缺失且阅读为零时仍输出标准 JSON。"""
+    import pandas as pd
+
+    csv_path = tmp_path / "minimal_content.csv"
+    pd.DataFrame({
+        "content_id": range(1, 6),
+        "reads": [0] * 5,
+        "likes": [1, 2, 3, 4, 5],
+        "platform": ["微博"] * 5,
+        "content_type": ["图文"] * 5,
+    }).to_csv(csv_path, index=False)
+
+    rc, out = _run(["content", str(csv_path)], capsys)
+    assert rc == 0
+    payload = json.loads(
+        out,
+        parse_constant=lambda value: (_ for _ in ()).throw(ValueError(value)),
+    )
+    assert payload["metrics"]["avg_engagement_rate"] == 0.0
+    assert payload["metrics"]["total_engagement"] == 15
 
 
 def test_sentiment_subcommand_fallback_snownlp(capsys):
@@ -115,7 +138,25 @@ def test_insights_subcommand_json(capsys):
     assert rc == 0
     payload = json.loads(out)
     assert payload["backend"] == "heuristic"
+    assert payload["fallback_reason"] is None
     assert "overview" in payload
+
+
+def test_insights_llm_missing_key_reports_visible_fallback(capsys, monkeypatch):
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "must-not-be-reused")
+
+    rc = cli.main([
+        "insights", str(SAMPLE / "content_sample.csv"),
+        "--use-llm", "--backend", "deepseek", "--format", "json",
+    ])
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+
+    assert rc == 0
+    assert payload["backend"] == "heuristic"
+    assert payload["fallback_reason"] == "deepseek 未配置 API key"
+    assert "LLM 降级" in captured.err
 
 
 def test_insights_with_comment_sentiment(capsys):

@@ -28,6 +28,7 @@ class InsightReport:
     platform_recommendations: List[str]
     risks: List[str]
     backend: str
+    fallback_reason: Optional[str] = None
 
     def to_dict(self) -> dict:
         return {
@@ -36,6 +37,7 @@ class InsightReport:
             "platform_recommendations": self.platform_recommendations,
             "risks": self.risks,
             "backend": self.backend,
+            "fallback_reason": self.fallback_reason,
         }
 
     def to_markdown(self) -> str:
@@ -46,6 +48,8 @@ class InsightReport:
             lines += ["## 平台运营建议", ""] + [f"- {r}" for r in self.platform_recommendations] + [""]
         if self.risks:
             lines += ["## 风险关注", ""] + [f"- {r}" for r in self.risks]
+        if self.fallback_reason:
+            lines += ["", f"> 生成方式：规则回退（{self.fallback_reason}）"]
         return "\n".join(lines)
 
 
@@ -55,6 +59,8 @@ class LLMClient:
                  api_key: Optional[str] = None,
                  base_url: Optional[str] = None,
                  timeout: float = 60.0):
+        if backend not in {"openai", "anthropic", "deepseek"}:
+            raise ValueError(f"不支持的 LLM backend：{backend}")
         self.backend = backend
         self.timeout = timeout
         self.api_key = api_key or self._default_key(backend)
@@ -66,7 +72,7 @@ class LLMClient:
         return {
             "openai": os.getenv("OPENAI_API_KEY"),
             "anthropic": os.getenv("ANTHROPIC_API_KEY"),
-            "deepseek": os.getenv("DEEPSEEK_API_KEY") or os.getenv("OPENAI_API_KEY"),
+            "deepseek": os.getenv("DEEPSEEK_API_KEY"),
         }.get(backend)
 
     @staticmethod
@@ -116,7 +122,8 @@ def _strip_fences(text: str) -> str:
 # --- 规则 fallback ---------------------------------------------------------
 
 def _heuristic_insights(content: Dict, fan: Dict, sentiment: Optional[Dict],
-                        platforms: Dict, content_types: Dict) -> InsightReport:
+                        platforms: Dict, content_types: Dict,
+                        fallback_reason: Optional[str] = None) -> InsightReport:
     n_posts = content.get("n_posts", 0)
     total_reads = content.get("total_reads", 0)
     avg_rate = content.get("avg_engagement_rate", 0)
@@ -178,6 +185,13 @@ def _heuristic_insights(content: Dict, fan: Dict, sentiment: Optional[Dict],
         risks.append(
             f"评论负向占比 {sentiment.get('negative_pct'):.0f}%，关注客服 / 产品反馈"
         )
+    if fan and fan.get("stock_flow_check_available") and not fan.get(
+            "stock_flow_consistent", True):
+        risks.append(
+            "粉丝存量与新增/取关流量不守恒：期末差额 "
+            f"{fan.get('stock_flow_gap', 0):+}，最大日差额 "
+            f"{fan.get('max_abs_stock_flow_gap', 0)}"
+        )
     if avg_rate < 0.005:
         risks.append("互动率极低，账号活跃度堪忧")
     if not risks:
@@ -189,6 +203,7 @@ def _heuristic_insights(content: Dict, fan: Dict, sentiment: Optional[Dict],
         platform_recommendations=platform_recs[:3],
         risks=risks[:5],
         backend="heuristic",
+        fallback_reason=fallback_reason,
     )
 
 
@@ -212,16 +227,24 @@ def generate_insights(
     if client is None and backend:
         client = LLMClient(backend=backend)
 
-    if client and client.is_available():
-        try:
-            return _llm_insights(content_metrics, fan_metrics,
-                                 sentiment_summary, platforms, content_types,
-                                 client)
-        except (LLMNotAvailable, ValueError, json.JSONDecodeError):
-            pass
+    fallback_reason = None
+    if client:
+        if not client.is_available():
+            fallback_reason = f"{client.backend} 未配置 API key"
+        else:
+            try:
+                return _llm_insights(content_metrics, fan_metrics,
+                                     sentiment_summary, platforms, content_types,
+                                     client)
+            except Exception as exc:
+                # SDK 异常类型不统一；只披露类型，避免把响应或凭据带入报告。
+                fallback_reason = (
+                    f"{client.backend} 调用失败：{type(exc).__name__}"
+                )
 
     return _heuristic_insights(content_metrics, fan_metrics, sentiment_summary,
-                               platforms, content_types)
+                               platforms, content_types,
+                               fallback_reason=fallback_reason)
 
 
 def _llm_insights(content, fan, sentiment, platforms, content_types,
@@ -244,12 +267,23 @@ def _llm_insights(content, fan, sentiment, platforms, content_types,
             + "\n\n按 system 要求输出 JSON。")
     raw = _strip_fences(client.chat(system, user, temperature=0.3))
     data = json.loads(raw)
+    if not isinstance(data, dict):
+        raise ValueError("LLM 响应必须是 JSON object")
+
+    overview = data.get("overview", "")
+    if not isinstance(overview, str):
+        raise ValueError("overview 必须是字符串")
+
+    def _string_list(field: str) -> List[str]:
+        value = data.get(field, [])
+        if not isinstance(value, list):
+            raise ValueError(f"{field} 必须是字符串列表")
+        return [item for item in value if isinstance(item, str) and item]
+
     return InsightReport(
-        overview=str(data.get("overview", "")),
-        content_recommendations=[str(x) for x in
-                                 data.get("content_recommendations", []) if x],
-        platform_recommendations=[str(x) for x in
-                                  data.get("platform_recommendations", []) if x],
-        risks=[str(x) for x in data.get("risks", []) if x],
+        overview=overview,
+        content_recommendations=_string_list("content_recommendations"),
+        platform_recommendations=_string_list("platform_recommendations"),
+        risks=_string_list("risks"),
         backend=f"llm:{client.backend}",
     )

@@ -18,11 +18,13 @@ content_data.to_csv('sample_data/content_sample.csv', index=False, encoding='utf
 
 # 粉丝数据
 dates = pd.date_range('2024-01-01', periods=30, freq='D')
+new_fans = np.random.randint(50, 500, 30)
+unfollows = np.random.randint(10, 100, 30)
 fan_data = pd.DataFrame({
     'date': dates.strftime('%Y-%m-%d'),
-    'new_fans': np.random.randint(50, 500, 30),
-    'unfollows': np.random.randint(10, 100, 30),
-    'total_fans': np.cumsum(np.random.randint(50, 500, 30)) + 10000,
+    'new_fans': new_fans,
+    'unfollows': unfollows,
+    'total_fans': 10000 + np.cumsum(new_fans - unfollows),
     'interactions': np.random.randint(100, 5000, 30),
     'gender': np.random.choice(['男', '女'], 30),
     'age': np.random.randint(18, 60, 30),

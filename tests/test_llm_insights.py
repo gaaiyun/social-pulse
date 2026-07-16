@@ -47,6 +47,17 @@ def test_default_models():
     assert LLMClient(backend="deepseek", api_key="x").model == "deepseek-chat"
 
 
+def test_deepseek_does_not_reuse_openai_key(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-only")
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    assert LLMClient(backend="deepseek").is_available() is False
+
+
+def test_unknown_backend_is_rejected():
+    with pytest.raises(ValueError, match="backend"):
+        LLMClient(backend="unknown")
+
+
 def test_chat_raises_without_key(monkeypatch):
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
@@ -166,6 +177,45 @@ def test_generate_llm_fallback_on_bad_json():
     assert report.backend == "heuristic"
 
 
+@pytest.mark.parametrize("error", [
+    RuntimeError("SDK failure"),
+    ConnectionError("network failure"),
+    OSError("transport failure"),
+])
+def test_generate_llm_fallback_on_runtime_and_network_errors(error):
+    client = LLMClient(backend="deepseek", api_key="sk-test")
+    client.chat = MagicMock(side_effect=error)
+
+    report = generate_insights(content_metrics=_content_metrics(),
+                               llm_client=client)
+
+    assert report.backend == "heuristic"
+    assert report.fallback_reason == f"deepseek 调用失败：{type(error).__name__}"
+
+
+def test_generate_llm_fallback_on_string_instead_of_string_list():
+    client = LLMClient(backend="deepseek", api_key="sk-test")
+    client.chat = MagicMock(return_value=
+        '{"overview": "x", "content_recommendations": "不要拆成字符", '
+        '"platform_recommendations": [], "risks": []}'
+    )
+
+    report = generate_insights(content_metrics=_content_metrics(),
+                               llm_client=client)
+
+    assert report.backend == "heuristic"
+    assert report.fallback_reason == "deepseek 调用失败：ValueError"
+
+
+def test_heuristic_flags_fan_stock_flow_conflict():
+    fan = _fan_metrics(stock_flow_check_available=True,
+                       stock_flow_consistent=False,
+                       stock_flow_gap=25,
+                       max_abs_stock_flow_gap=25)
+    report = _heuristic_insights(_content_metrics(), fan, None, {}, {})
+    assert any("存量" in risk and "25" in risk for risk in report.risks)
+
+
 def test_generate_filters_empty_list_items():
     client = LLMClient(backend="deepseek", api_key="sk-test")
     client.chat = MagicMock(return_value=
@@ -188,6 +238,7 @@ def test_insight_report_to_markdown_no_recs():
     report = InsightReport(
         overview="只有概览", content_recommendations=[],
         platform_recommendations=[], risks=[], backend="heuristic",
+        fallback_reason=None,
     )
     md = report.to_markdown()
     assert "## 整体概览" in md

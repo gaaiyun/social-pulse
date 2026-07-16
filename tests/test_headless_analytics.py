@@ -82,6 +82,44 @@ def test_content_missing_reads_raises():
         compute_content_metrics(df)
 
 
+def test_content_optional_comments_and_shares_default_to_zero():
+    df = pd.DataFrame({
+        "reads": [100, 200, 300, 400, 500],
+        "likes": [1, 2, 3, 4, 5],
+        "platform": ["微博"] * 5,
+        "content_type": ["图文"] * 5,
+        "publish_time": pd.date_range("2024-01-01", periods=5),
+    })
+
+    assert compute_content_metrics(df).total_engagement == 15
+    assert platform_breakdown(df)["微博"]["total_engagement"] == 15
+    assert content_type_breakdown(df)["图文"]["total_engagement"] == 15
+    assert posting_time_analysis(df)["by_hour"]
+    assert viral_features(df)["n_viral"] >= 1
+
+
+def test_content_zero_reads_produce_finite_zero_rates():
+    import math
+
+    df = pd.DataFrame({
+        "reads": [0] * 5,
+        "likes": [1, 2, 3, 4, 5],
+        "comments": [0] * 5,
+        "shares": [0] * 5,
+        "platform": ["微博"] * 5,
+        "publish_time": pd.date_range("2024-01-01", periods=5),
+    })
+
+    metrics = compute_content_metrics(df)
+    assert metrics.avg_engagement_rate == 0.0
+    assert math.isfinite(metrics.viral_threshold)
+    assert metrics.n_viral == 0
+    assert viral_features(df) == {}
+    assert platform_breakdown(df)["微博"]["avg_engagement_rate"] == 0.0
+    assert all(math.isfinite(rate)
+               for rate in posting_time_analysis(df)["by_hour"].values())
+
+
 def test_content_to_dict_serializable(content_df):
     import json
     m = compute_content_metrics(content_df)
@@ -144,8 +182,40 @@ def test_fan_net_growth_correct(fan_df):
 
 def test_fan_starting_ending_match(fan_df):
     g = compute_fan_growth(fan_df)
-    assert g.starting_fans == int(fan_df["total_fans"].iloc[0])
+    first_net = int(fan_df["new_fans"].iloc[0] - fan_df["unfollows"].iloc[0])
+    assert g.starting_fans == int(fan_df["total_fans"].iloc[0]) - first_net
     assert g.ending_fans == int(fan_df["total_fans"].iloc[-1])
+
+
+def test_fan_growth_percentage_uses_full_period_net_flow(fan_df):
+    g = compute_fan_growth(fan_df)
+    assert g.ending_fans - g.starting_fans == g.net_growth
+    assert g.growth_pct == pytest.approx(g.net_growth / g.starting_fans * 100)
+    assert g.stock_flow_check_available is True
+    assert g.stock_flow_consistent is True
+    assert g.stock_flow_gap == 0
+    assert g.max_abs_stock_flow_gap == 0
+
+
+def test_fan_growth_exposes_inconsistent_stock_flow(fan_df):
+    fan_df = fan_df.copy()
+    fan_df.loc[10:, "total_fans"] += 25
+
+    g = compute_fan_growth(fan_df)
+
+    assert g.stock_flow_check_available is True
+    assert g.stock_flow_consistent is False
+    assert g.stock_flow_gap == 25
+    assert g.max_abs_stock_flow_gap == 25
+
+
+def test_fan_growth_without_stock_marks_check_unavailable(fan_df):
+    g = compute_fan_growth(fan_df.drop(columns="total_fans"))
+
+    assert g.stock_flow_check_available is False
+    assert g.stock_flow_consistent is None
+    assert g.stock_flow_gap is None
+    assert g.max_abs_stock_flow_gap is None
 
 
 def test_fan_growth_pct_positive_when_growing(fan_df):

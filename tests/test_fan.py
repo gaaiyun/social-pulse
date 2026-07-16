@@ -12,6 +12,7 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from fan_analyzer import FanAnalyzer
+from headless_analytics import compute_fan_growth
 
 
 @pytest.fixture
@@ -55,6 +56,34 @@ class TestFanAnalyzer:
         assert 'total_fans' in metrics
         assert 'net_new_fans' in metrics
         assert metrics['total_fans'] > 0
+
+    def test_growth_metrics_match_headless_cli_definition(self):
+        data = pd.DataFrame({
+            'date': pd.date_range('2024-01-01', periods=3),
+            'new_fans': [100, 80, 60],
+            'unfollows': [20, 30, 10],
+            'total_fans': [1080, 1130, 1180],
+        })
+
+        v1 = FanAnalyzer(data).calculate_growth_metrics()
+        cli = compute_fan_growth(data)
+
+        assert v1['total_fans'] == cli.ending_fans
+        assert v1['net_new_fans'] == cli.net_growth
+        assert v1['avg_daily_growth'] == pytest.approx(cli.daily_net_avg)
+        assert v1['growth_rate'] == pytest.approx(cli.growth_pct)
+
+    def test_growth_trend_preserves_provided_stock(self):
+        data = pd.DataFrame({
+            'date': pd.date_range('2024-01-01', periods=2),
+            'new_fans': [100, 50],
+            'unfollows': [20, 10],
+            'total_fans': [1080, 1120],
+        })
+
+        trend = FanAnalyzer(data).analyze_growth_trend()
+
+        assert trend['total_fans'].tolist() == [1080, 1120]
     
     def test_analyze_demographics(self, sample_fan_data):
         """测试人口统计特征分析"""
